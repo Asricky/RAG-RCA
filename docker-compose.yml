@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rca_copilot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U postgres -d rca_copilot"], interval: 5s, timeout: 3s, retries: 20}
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["127.0.0.1:9200:9200"]
+    volumes: [opensearch_data:/usr/share/opensearch/data]
+    healthcheck: {test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"], interval: 10s, timeout: 5s, retries: 30}
+  backend:
+    build: ./backend
+    env_file: [.env]
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: [./data:/data:ro]
+    depends_on:
+      postgres: {condition: service_healthy}
+      opensearch: {condition: service_healthy}
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment: {API_URL: http://backend:8000}
+    ports: ["3000:3000"]
+    depends_on: [backend]
+volumes: {postgres_data: {}, opensearch_data: {}}
