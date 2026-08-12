@@ -173,10 +173,17 @@ Mock provider tetap menghasilkan RCA deterministik berbasis evidence. Mode ini c
 Local default:
 
 ```env
-EMBEDDING_MODEL=feature-hashing-v1
+OPENSEARCH_URL=http://127.0.0.1:9200
+OPENSEARCH_INDEX=5g-logs-st-v1
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+EMBEDDING_DEVICE=cpu
+EMBEDDING_BATCH_SIZE=32
 ```
 
-Feature hashing bersifat ringan dan offline. Dropdown Evaluation juga menampilkan Sentence Transformer untuk pencatatan konfigurasi eksperimen, tetapi retrieval prototype saat ini masih menjalankan encoder feature hashing in-process. Mengganti nama pada dropdown belum memuat model Sentence Transformer sebenarnya.
+Backend memuat model Sentence Transformer secara lazy, memvalidasi dimensi output, membuat normalized document embeddings, lalu menyimpannya pada field `knn_vector` OpenSearch. Query RCA menjalankan `multi_match` OpenSearch untuk BM25 dan HNSW kNN menggunakan query embedding dari model yang sama. Kedua skor dinormalisasi lalu digabungkan memakai `DEFAULT_ALPHA`.
+
+Model pertama kali akan diunduh dari Hugging Face. Pastikan koneksi internet tersedia pada startup pertama. Cache model digunakan kembali pada startup berikutnya.
 
 OpenSearch dapat dinyalakan dengan:
 
@@ -191,7 +198,15 @@ Invoke-RestMethod http://127.0.0.1:9200/_cluster/health
 Invoke-RestMethod http://localhost:8000/api/health/opensearch
 ```
 
-Backend membuat index `5g-logs` dan mengirim synthetic documents pada startup. Ranking aktif prototype masih mempunyai in-memory fallback agar dashboard tetap berjalan ketika OpenSearch tidak tersedia.
+Backend membuat index `5g-logs-st-v1`, menghasilkan embedding untuk synthetic documents, dan melakukan bulk indexing pada startup. Periksa encoder melalui:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/api/health/embedding
+```
+
+Tidak ada in-memory semantic fallback pada runtime development/production. Analyze with AI dan Evaluation mengembalikan HTTP `503` bila OpenSearch, index, atau Sentence Transformer belum siap. Log table tetap dapat dibuka karena source JSONL lokal masih dipakai untuk live display.
+
+Jika mengganti `EMBEDDING_MODEL`, sesuaikan `EMBEDDING_DIMENSION` dan gunakan nama `OPENSEARCH_INDEX` baru agar vector dari model berbeda tidak tercampur.
 
 ## 5. Variabel penting
 
@@ -200,11 +215,15 @@ Backend membuat index `5g-logs` dan mengirim synthetic documents pada startup. R
 | `DATABASE_URL` | `postgresql+psycopg://...` | Koneksi database aplikasi |
 | `JWT_SECRET` | random minimum 32 karakter | Signature access/refresh token |
 | `OPENSEARCH_URL` | `http://127.0.0.1:9200` | Endpoint log store |
-| `OPENSEARCH_INDEX` | `5g-logs` | Nama index log |
+| `OPENSEARCH_INDEX` | `5g-logs-st-v1` | Nama index log/vector |
+| `OPENSEARCH_TIMEOUT_SECONDS` | `30` | Timeout request OpenSearch |
 | `LLM_PROVIDER` | `ollama` atau `mock` | Adapter RCA |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Endpoint Ollama |
 | `OLLAMA_MODEL` | `llama3.2:3b` | Model generation |
-| `EMBEDDING_MODEL` | `feature-hashing-v1` | Label/encoder retrieval |
+| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Model embedding query dan dokumen |
+| `EMBEDDING_DIMENSION` | `384` | Dimensi `knn_vector`; harus cocok dengan model |
+| `EMBEDDING_DEVICE` | `cpu` | Device inference (`cpu`, `cuda`, atau `mps`) |
+| `EMBEDDING_BATCH_SIZE` | `32` | Batch size saat indexing |
 | `DEFAULT_ALPHA` | `0.5` | Bobot BM25 dalam score fusion |
 | `DEFAULT_TOP_K` | `10` | Jumlah evidence default |
 
@@ -227,6 +246,14 @@ Jangan commit `.env`, `.env.local`, password database, atau JWT secret.
 - cek `/api/tags` pada port `11434`;
 - jika backend berada di Docker, gunakan `host.docker.internal`, bukan `127.0.0.1`;
 - restart aplikasi setelah mengubah `.env.local`.
+
+### OpenSearch retrieval belum siap
+
+- pastikan Docker Desktop aktif, lalu jalankan `docker compose up -d opensearch`;
+- cek `/api/health/opensearch` dan `/api/health/embedding` untuk detail error;
+- tunggu status `Healthy` setelah download model dan bulk indexing pertama;
+- bila index tidak kompatibel, gunakan nama `OPENSEARCH_INDEX` baru atau recreate hanya index development tersebut;
+- pastikan model dapat diunduh dari Hugging Face pada startup pertama.
 
 ### AI masih memakai mock
 

@@ -92,7 +92,7 @@ def test_operations_incident_and_admin_actions():
                 "top_k": 5,
                 "time_before_minutes": 5,
                 "time_after_minutes": 5,
-                "embedding_model": "feature-hashing-v1",
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
             },
         )
         assert evaluation.status_code == 200

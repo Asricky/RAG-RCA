@@ -8,10 +8,10 @@ Dokumen ini menjelaskan kondisi codebase pada 12 Agustus 2026: tujuan sistem, ar
 
 Codebase ini dapat berjalan dalam dua profil:
 
-- **Local demo**: Next.js + FastAPI + SQLite + 400 synthetic logs. Retrieval dan RCA mempunyai fallback lokal sehingga demo langsung berjalan.
-- **Docker infrastructure**: Next.js + FastAPI + PostgreSQL + OpenSearch. Ollama dapat dijalankan terpisah pada host.
+- **Local application**: Next.js + FastAPI + SQLite + 400 synthetic logs, dengan OpenSearch sebagai retrieval service.
+- **Docker infrastructure**: Next.js + FastAPI + PostgreSQL + OpenSearch. Sentence Transformer berjalan di backend dan Ollama dapat dijalankan terpisah pada host.
 
-Status implementasi saat ini adalah **runnable research prototype**, bukan production NOC platform. Jalur utama demo berfungsi, tetapi beberapa integrasi PRD masih berupa adapter/fallback yang dijelaskan pada bagian gap.
+Status implementasi saat ini adalah **runnable research prototype**, bukan production NOC platform. Retrieval utama sudah menggunakan OpenSearch BM25 dan Sentence Transformer kNN aktual; generation LLM tetap memiliki safe fallback bila Ollama tidak tersedia.
 
 ## 2. Quick start
 
@@ -64,8 +64,8 @@ Next.js frontend
   ▼
 FastAPI backend (port 8000, loopback pada local launcher)
   ├── SQLAlchemy ── SQLite local / PostgreSQL Docker
-  ├── LogStore ──── JSONL memory store + optional OpenSearch indexing
-  ├── Retrieval ─── BM25 + semantic feature hashing + score fusion
+  ├── LogStore ──── JSONL display source + required OpenSearch retrieval
+  ├── Retrieval ─── OpenSearch BM25 + Sentence Transformer kNN + score fusion
   └── LLM adapter ─ Ollama + deterministic safe fallback
 ```
 
@@ -83,8 +83,9 @@ Frontend tidak berkomunikasi langsung dengan OpenSearch. Semua request browser m
 │   │   ├── models.py               application persistence models
 │   │   ├── security.py             password hashing dan signed token
 │   │   └── services/
-│   │       ├── log_store.py         query log dan optional indexing
-│   │       ├── retrieval.py         BM25, semantic, fusion, bundle
+│   │       ├── embeddings.py        lazy Sentence Transformer encoder
+│   │       ├── log_store.py         OpenSearch indexing dan hybrid search
+│   │       ├── retrieval.py         context, fusion result, evidence bundle
 │   │       └── llm.py               Ollama dan safe fallback
 │   ├── alembic/                     baseline migration
 │   ├── tests/                       API dan retrieval tests
@@ -211,9 +212,9 @@ Pipeline berada pada `backend/app/services/retrieval.py`:
 ```text
 Question + UI context
   → timestamp/node/severity/trace/session candidate filtering
-  → tokenization
-  → BM25 score
-  → deterministic semantic feature-hashing vector + cosine similarity
+  → OpenSearch multi_match BM25
+  → Sentence Transformer query embedding
+  → OpenSearch Lucene HNSW kNN
   → per-channel min-max normalization
   → alpha-weighted score fusion
   → selected-log boost
@@ -230,7 +231,9 @@ final = alpha × normalized_bm25 + (1 - alpha) × normalized_semantic
 
 Default `alpha=0.5`, `top_k=10`, dan incident window ±5 menit. `Search More Evidence` menggunakan Top-20 serta window ±15 menit.
 
-Semantic fallback `feature-hashing-v1` bersifat deterministic, ringan, dan tidak memerlukan download model; ia bukan Sentence Transformer. `log_store.py` dapat membuat index dan mengirim vector ke OpenSearch, tetapi jalur ranking aktif saat ini tetap dilakukan in-process. Untuk memenuhi arsitektur production PRD secara penuh, BM25 harus dijalankan oleh OpenSearch dan semantic query harus menggunakan embedding Sentence Transformer yang sama dengan ingestion.
+`embeddings.py` memuat `sentence-transformers/all-MiniLM-L6-v2`, menggunakan jalur `encode_document`/`encode_query`, dan melakukan L2 normalization. `log_store.py` membuat `knn_vector` 384 dimensi dengan HNSW engine Lucene, mengindeks dokumen secara batch, menjalankan BM25 dan kNN sebagai query OpenSearch terpisah, lalu menggabungkan union hasil berdasarkan alpha. Metadata index mengunci nama model dan dimensi agar vector yang tidak kompatibel tidak tercampur.
+
+Runtime tidak menggunakan in-memory retrieval fallback. Ketika OpenSearch/model/index belum sehat, endpoint retrieval mengembalikan HTTP 503; test suite menggunakan deterministic search double yang hanya aktif di test.
 
 `llm.py` memanggil Ollama `/api/chat` dengan structured JSON prompt. Jika runtime tidak tersedia atau output invalid, deterministic mock-safe provider menghasilkan RCA berbasis evidence. Semua `evidence_ids` divalidasi terhadap bundle; ID di luar bundle dibuang dan fallback aman dipakai apabila tidak tersisa citation valid.
 
@@ -286,7 +289,7 @@ Audit dependency terakhir setelah upgrade Next.js 16.3.0 menghasilkan **0 vulner
 - demo flow jelas dari login sampai raw evidence;
 - informasi retrieval tidak disembunyikan dari analyst;
 - filter dan selected log masuk ke konteks AI;
-- fallback menjaga aplikasi tetap berguna tanpa infrastructure berat;
+- status health menjelaskan kesiapan OpenSearch, embedding, database, dan Ollama;
 - satu command mengurangi setup error;
 - backend tests dan production frontend build tersedia dalam satu command.
 
@@ -294,7 +297,7 @@ Audit dependency terakhir setelah upgrade Next.js 16.3.0 menghasilkan **0 vulner
 
 | Prioritas | Area | Rekomendasi |
 |---|---|---|
-| P0 | Retrieval fidelity | Jalankan BM25/k-NN aktual di OpenSearch dan Sentence Transformer ingestion |
+| P1 | Retrieval evaluation | Uji model embedding/domain adaptation pada dataset 5G yang lebih besar |
 | P0 | Production auth | HttpOnly session, distributed rate limit, secret manager |
 | P1 | Log scale | Server pagination + TanStack virtualized table |
 | P1 | Data ingestion | Staging storage, mapping UI, async worker, per-row error report |
@@ -354,6 +357,6 @@ Docker Compose adalah profil development/integration, bukan template internet pr
 
 ## 14. Kesimpulan audit
 
-Aplikasi sudah mempunyai jalur demo yang koheren, visual yang sesuai domain observability, evidence traceability, fallback yang praktis, dan sekarang dapat dijalankan dari root dengan satu perintah. Perbaikan audit menutup risiko token SSE di access log, memperbaiki lifecycle session, input validation, secure defaults, mobile AI access, dan error feedback.
+Aplikasi sudah mempunyai jalur demo yang koheren, visual yang sesuai domain observability, evidence traceability, OpenSearch hybrid retrieval aktual, dan dapat menjalankan frontend/backend dari root dengan satu perintah. Perbaikan audit menutup risiko token SSE di access log, memperbaiki lifecycle session, input validation, secure defaults, mobile AI access, dan error feedback.
 
-Risiko terbesar bukan pada kelancaran demo, melainkan pada perbedaan antara fallback penelitian lokal dan arsitektur retrieval production yang dijanjikan PRD. Prioritas teknis selanjutnya adalah mengganti ranking in-process dengan OpenSearch BM25/k-NN dan embedding Sentence Transformer aktual, kemudian menguatkan session/auth untuk deployment multi-user.
+Prioritas teknis berikutnya adalah mengukur kualitas retrieval baru pada benchmark yang lebih besar, melakukan domain adaptation embedding bila diperlukan, dan menguatkan session/auth untuk deployment multi-user.

@@ -15,9 +15,12 @@ Perintah tersebut otomatis:
 1. membuat Python virtual environment jika belum ada;
 2. memasang dependency backend dan frontend jika dibutuhkan;
 3. membuat synthetic dataset jika belum tersedia;
-4. menjalankan FastAPI pada port `8000`;
-5. menjalankan Next.js pada port `3000`;
-6. menampilkan URL setelah kedua service siap.
+4. menyalakan container OpenSearch bila Docker Desktop tersedia;
+5. menjalankan FastAPI pada port `8000`;
+6. menjalankan Next.js pada port `3000`;
+7. menampilkan URL setelah kedua service aplikasi siap.
+
+Jika Docker Desktop belum aktif, dashboard dan log viewer tetap menyala, tetapi Analyze with AI/Evaluation akan mengembalikan `503` sampai OpenSearch tersedia. Aktifkan Docker Desktop lalu restart perintah yang sama.
 
 Buka <http://localhost:3000> dan login dengan:
 
@@ -52,7 +55,7 @@ API documentation tersedia di <http://localhost:8000/docs> ketika aplikasi berja
 
 ## Docker Compose
 
-Untuk PostgreSQL dan OpenSearch penuh:
+Untuk PostgreSQL dan OpenSearch:
 
 ```powershell
 Copy-Item .env.example .env
@@ -60,7 +63,7 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-OpenSearch dan backend hanya dipublikasikan pada loopback host; browser mengakses API melalui reverse proxy Next.js. Ollama diharapkan berjalan pada host port `11434`. Jika OpenSearch atau Ollama tidak tersedia, aplikasi lokal tetap dapat didemokan menggunakan in-memory retrieval dan mock-safe RCA fallback.
+OpenSearch dan backend hanya dipublikasikan pada loopback host; browser mengakses API melalui reverse proxy Next.js. Retrieval RCA menggunakan BM25 OpenSearch dan kNN dengan embedding `sentence-transformers/all-MiniLM-L6-v2`. OpenSearch wajib aktif untuk Analyze with AI dan Evaluation; aplikasi mengembalikan status `503` yang jelas bila retrieval belum siap. Ollama diharapkan berjalan pada host port `11434`; jika Ollama tidak tersedia, generation tetap dapat memakai mock-safe RCA berbasis evidence hasil OpenSearch.
 
 ## Dokumentasi
 

@@ -48,6 +48,29 @@ function commandExists(command) {
   return check.status === 0;
 }
 
+function ensureLocalOpenSearch(environment) {
+  const configuredUrl = environment.OPENSEARCH_URL || "http://127.0.0.1:9200";
+  let hostname;
+  try { hostname = new URL(configuredUrl).hostname; } catch { return; }
+  if (!["127.0.0.1", "localhost"].includes(hostname)) return;
+  if (!commandExists("docker")) {
+    console.warn(paint.yellow("OpenSearch lokal belum dapat disiapkan: Docker CLI tidak ditemukan."));
+    console.warn("Dashboard tetap menyala, tetapi Analyze with AI akan menampilkan 503 sampai OpenSearch tersedia.\n");
+    return;
+  }
+  const daemon = spawnSync("docker", ["info"], { cwd: root, stdio: "ignore", shell: false });
+  if (daemon.status !== 0) {
+    console.warn(paint.yellow("OpenSearch lokal belum dapat disiapkan: Docker Desktop belum aktif."));
+    console.warn("Aktifkan Docker Desktop lalu restart `npm run dev`.\n");
+    return;
+  }
+  console.log(paint.yellow("Memastikan OpenSearch lokal aktif…"));
+  const compose = spawnSync("docker", ["compose", "up", "-d", "opensearch"], { cwd: root, stdio: "inherit", shell: false });
+  if (compose.status !== 0) {
+    console.warn(paint.yellow("OpenSearch gagal dijalankan. Dashboard tetap dimulai tanpa RCA retrieval.\n"));
+  }
+}
+
 function setup() {
   console.log(paint.cyan("\n5G RCA Copilot · environment check\n"));
   if (!existsSync(python)) {
@@ -134,12 +157,13 @@ function shutdown(code = 0) {
 }
 
 setup();
+const fileEnvironment = localEnvironment();
 if (setupOnly) process.exit(0);
+ensureLocalOpenSearch(fileEnvironment);
 
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-const fileEnvironment = localEnvironment();
 const runtimeSecret = process.env.JWT_SECRET || fileEnvironment.JWT_SECRET || randomBytes(48).toString("base64url");
 start("Backend", python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"], backendDir, {
   ...fileEnvironment,

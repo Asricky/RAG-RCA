@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -21,8 +21,9 @@ from .database import Base, SessionLocal, engine, get_db
 from .models import Analysis, AnalysisEvidence, AuditLog, Conversation, Dataset, EvaluationRun, GroundTruth, Incident, Message, RefreshToken, User, now
 from .security import create_token, decode_token, hash_password, token_hash, verify_password
 from .services.llm import generate_rca, provider_status
+from .services.embeddings import embedding_encoder
 from .services.log_store import log_store
-from .services.retrieval import retrieve
+from .services.retrieval import RetrievalUnavailable, retrieve
 
 
 @asynccontextmanager
@@ -38,6 +39,11 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="5G RCA Copilot API", version="1.0.0", docs_url="/docs", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
+
+
+@app.exception_handler(RetrievalUnavailable)
+async def retrieval_unavailable(_: Request, exc: RetrievalUnavailable):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.middleware("http")
@@ -303,7 +309,7 @@ def related(payload: dict, _: User = Depends(current_user)):
     selected = [item for item in log_store.logs if item["log_id"] in log_ids]
     if not selected: raise HTTPException(400, "Select at least one log")
     context = {"selected_nodes": list({item["node"] for item in selected}), "selected_log_ids": log_ids}
-    return retrieve(log_store.logs, payload.get("question", "related failure events"), context, {"top_k": payload.get("top_k", 10), "alpha": 0.5})
+    return retrieve(log_store, payload.get("question", "related failure events"), context, {"top_k": payload.get("top_k", 10), "alpha": 0.5})
 
 
 @app.get("/api/incidents")
@@ -449,7 +455,7 @@ def retrieve_only(body: AnalysisBody, _: User = Depends(current_user)):
     if len(json.dumps(body.ui_context)) > 64_000:
         raise HTTPException(413, "UI context is too large")
     context = {**body.ui_context, "incident_id": body.incident_id}
-    return retrieve(log_store.logs, body.question, context, body.retrieval_config)
+    return retrieve(log_store, body.question, context, body.retrieval_config)
 
 
 @app.post("/api/analysis/run")
@@ -464,7 +470,7 @@ def run_analysis(body: AnalysisBody, db: Session = Depends(get_db), user: User =
     incident = db.get(Incident, body.incident_id) if body.incident_id else None
     context = {**body.ui_context, "incident_id": body.incident_id}
     if incident: context.setdefault("incident_timestamp", incident.incident_timestamp.isoformat())
-    bundle = retrieve(log_store.logs, body.question, context, body.retrieval_config)
+    bundle = retrieve(log_store, body.question, context, body.retrieval_config)
     result, llm_ms, provider = generate_rca(body.question, bundle)
     assistant = Message(conversation_id=conversation.id, sender_type="ASSISTANT", message_type="RCA", content=json.dumps(result, ensure_ascii=False)); db.add(assistant); db.flush()
     total_ms = max(1, int((time.perf_counter() - total_started) * 1000))
@@ -520,7 +526,7 @@ def run_evaluation(body: EvaluationBody, db: Session = Depends(get_db), user: Us
     started = time.perf_counter(); truths = db.scalars(select(GroundTruth)).all(); precision_values=[]; recall_values=[]; hits=[]; reciprocal=[]; latencies=[]
     for truth in truths:
         incident = db.get(Incident, truth.incident_id)
-        bundle = retrieve(log_store.logs, truth.root_cause, {"incident_timestamp": incident.incident_timestamp.isoformat(), "selected_nodes": incident.nodes}, body.model_dump())
+        bundle = retrieve(log_store, truth.root_cause, {"incident_timestamp": incident.incident_timestamp.isoformat(), "selected_nodes": incident.nodes}, body.model_dump())
         retrieved = [item["log_id"] for item in bundle["evidence_logs"]]; relevant = set(truth.evidence_log_ids); matched = [item for item in retrieved if item in relevant]
         precision_values.append(len(matched) / max(1, len(retrieved))); recall_values.append(len(matched) / max(1, len(relevant))); hits.append(float(bool(matched))); reciprocal.append(1 / (retrieved.index(matched[0]) + 1) if matched else 0); latencies.append(bundle["retrieval_latency_ms"])
     average = lambda values: round(sum(values) / max(1, len(values)), 4)
@@ -553,10 +559,11 @@ def health():
         with engine.connect() as connection: connection.execute(text("SELECT 1"))
     except Exception: database = "Unavailable"
     ollama = provider_status()
-    if database != "Healthy" or log_store.opensearch_status != "Healthy" or ollama.startswith("Unavailable"):
-        opensearch = log_store.opensearch_status if log_store.opensearch_status == "Healthy" else f"{log_store.opensearch_status} · in-memory fallback active"
-        return {"status": "Degraded", "services": {"backend": "Healthy", "database": database, "opensearch": opensearch, "embedding": f"Healthy · {settings.embedding_model}", "ollama": ollama}, "log_count": len(log_store.logs)}
-    return {"status": "Healthy" if database == "Healthy" else "Degraded", "services": {"backend": "Healthy", "database": database, "opensearch": log_store.opensearch_status, "embedding": f"Healthy · {settings.embedding_model}", "ollama": ollama}, "log_count": len(log_store.logs)}
+    embedding = f"{embedding_encoder.status} · {settings.embedding_model}"
+    if database != "Healthy" or log_store.opensearch_status != "Healthy" or embedding_encoder.status != "Healthy" or ollama.startswith("Unavailable"):
+        opensearch = log_store.opensearch_status if log_store.opensearch_status == "Healthy" else f"{log_store.opensearch_status} · RCA retrieval disabled"
+        return {"status": "Degraded", "services": {"backend": "Healthy", "database": database, "opensearch": opensearch, "embedding": embedding, "ollama": ollama}, "log_count": len(log_store.logs)}
+    return {"status": "Healthy" if database == "Healthy" else "Degraded", "services": {"backend": "Healthy", "database": database, "opensearch": log_store.opensearch_status, "embedding": embedding, "ollama": ollama}, "log_count": len(log_store.logs)}
 
 
 @app.get("/api/health/database")
@@ -568,7 +575,11 @@ def health_database():
 
 
 @app.get("/api/health/opensearch")
-def health_opensearch(): return {"status": log_store.opensearch_status, "url": settings.opensearch_url, "index": settings.opensearch_index}
+def health_opensearch(): return {"status": log_store.opensearch_status, "url": settings.opensearch_url, "index": settings.opensearch_index, "detail": log_store.last_error or None}
+
+
+@app.get("/api/health/embedding")
+def health_embedding(): return {"status": embedding_encoder.status, "model": settings.embedding_model, "dimension": settings.embedding_dimension, "device": settings.embedding_device, "detail": embedding_encoder.last_error or None}
 
 
 @app.get("/api/health/ollama")
