@@ -12,7 +12,8 @@ services:
     image: opensearchproject/opensearch:2.17.1
     environment:
       discovery.type: single-node
-      plugins.security.disabled: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
       OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
     ports: ["127.0.0.1:9200:9200"]
     volumes: [opensearch_data:/usr/share/opensearch/data]
@@ -23,7 +24,7 @@ services:
       - path: .env
         required: false
     ports: ["127.0.0.1:8000:8000"]
-    volumes: [./data:/data:ro, huggingface_cache:/root/.cache/huggingface]
+    volumes: [./data:/data:ro, ./config:/config:ro, dataset_storage:/app/storage, huggingface_cache:/root/.cache/huggingface]
     depends_on:
       postgres: {condition: service_healthy}
       opensearch: {condition: service_healthy}
@@ -34,4 +35,4 @@ services:
     environment: {API_URL: http://backend:8000}
     ports: ["3000:3000"]
     depends_on: [backend]
-volumes: {postgres_data: {}, opensearch_data: {}, huggingface_cache: {}}
+volumes: {postgres_data: {}, opensearch_data: {}, dataset_storage: {}, huggingface_cache: {}}

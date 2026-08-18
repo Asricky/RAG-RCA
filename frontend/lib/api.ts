@@ -85,7 +85,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     catch {
       clearSession();
       window.dispatchEvent(new Event("rca:auth-expired"));
-      throw new Error("Sesi berakhir. Silakan masuk kembali.");
+      throw new Error("Your session expired. Sign in again.");
     }
   }
   if (!response.ok) {
@@ -96,5 +96,5 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 }
 
 export function fmt(date: string) {
-  return new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(date));
+  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(date));
 }

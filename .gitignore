@@ -12,3 +12,10 @@ htmlcov/
 dist/
 *.log
 .uv-cache/
+backend/storage/
+data/kpi/raw/
+data/logs/raw/
+data/knowledge/raw/
+data/kpi/processed/
+data/logs/processed/
+data/knowledge/processed/

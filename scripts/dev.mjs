@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { resolve } from "node:path";
@@ -54,20 +54,20 @@ function ensureLocalOpenSearch(environment) {
   try { hostname = new URL(configuredUrl).hostname; } catch { return; }
   if (!["127.0.0.1", "localhost"].includes(hostname)) return;
   if (!commandExists("docker")) {
-    console.warn(paint.yellow("OpenSearch lokal belum dapat disiapkan: Docker CLI tidak ditemukan."));
-    console.warn("Dashboard tetap menyala, tetapi Analyze with AI akan menampilkan 503 sampai OpenSearch tersedia.\n");
+    console.warn(paint.yellow("Local OpenSearch could not be prepared: Docker CLI was not found."));
+    console.warn("The dashboard will remain available, but Analyze with AI returns 503 until OpenSearch is available.\n");
     return;
   }
   const daemon = spawnSync("docker", ["info"], { cwd: root, stdio: "ignore", shell: false });
   if (daemon.status !== 0) {
-    console.warn(paint.yellow("OpenSearch lokal belum dapat disiapkan: Docker Desktop belum aktif."));
-    console.warn("Aktifkan Docker Desktop lalu restart `npm run dev`.\n");
+    console.warn(paint.yellow("Local OpenSearch could not be prepared: Docker Desktop is not running."));
+    console.warn("Start Docker Desktop, then restart `npm run dev`.\n");
     return;
   }
-  console.log(paint.yellow("Memastikan OpenSearch lokal aktif…"));
+  console.log(paint.yellow("Ensuring local OpenSearch is running..."));
   const compose = spawnSync("docker", ["compose", "up", "-d", "opensearch"], { cwd: root, stdio: "inherit", shell: false });
   if (compose.status !== 0) {
-    console.warn(paint.yellow("OpenSearch gagal dijalankan. Dashboard tetap dimulai tanpa RCA retrieval.\n"));
+    console.warn(paint.yellow("OpenSearch could not be started. The dashboard will continue without RCA retrieval.\n"));
   }
 }
 
@@ -75,11 +75,11 @@ function setup() {
   console.log(paint.cyan("\n5G RCA Copilot · environment check\n"));
   if (!existsSync(python)) {
     if (!commandExists("uv")) {
-      console.error(paint.red("Python environment belum tersedia dan command `uv` tidak ditemukan."));
-      console.error("Install uv dari https://docs.astral.sh/uv/ lalu jalankan kembali `npm run dev`.");
+      console.error(paint.red("The Python environment is missing and the `uv` command was not found."));
+      console.error("Install uv from https://docs.astral.sh/uv/, then run `npm run dev` again.");
       process.exit(1);
     }
-    console.log(paint.yellow("Membuat Python virtual environment…"));
+    console.log(paint.yellow("Creating the Python virtual environment..."));
     run("uv", ["venv", resolve(backendDir, ".venv")], {
       env: { ...process.env, UV_CACHE_DIR: resolve(root, ".uv-cache") },
     });
@@ -90,24 +90,28 @@ function setup() {
   const installedHash = existsSync(requirementsMarker) ? readFileSync(requirementsMarker, "utf8").trim() : "";
   if (installedHash !== requirementsHash) {
     if (!commandExists("uv")) {
-      console.error(paint.red("Dependency backend berubah tetapi command `uv` tidak ditemukan."));
+      console.error(paint.red("Backend dependencies changed, but the `uv` command was not found."));
       process.exit(1);
     }
-    console.log(paint.yellow("Memasang dependency backend…"));
+    console.log(paint.yellow("Installing backend dependencies..."));
     run("uv", ["pip", "install", "--python", python, "-r", requirements], {
       env: { ...process.env, UV_CACHE_DIR: resolve(root, ".uv-cache") },
     });
     writeFileSync(requirementsMarker, `${requirementsHash}\n`);
   }
   if (!existsSync(resolve(frontendDir, "node_modules", "next", "package.json"))) {
-    console.log(paint.yellow("Memasang dependency frontend…"));
+    console.log(paint.yellow("Installing frontend dependencies..."));
     run("npm", ["install", "--prefix", frontendDir], { shell: isWindows });
   }
-  if (!existsSync(resolve(root, "data", "sample_logs.jsonl"))) {
-    console.log(paint.yellow("Membuat synthetic demo dataset…"));
+  for (const relative of [["data", "kpi", "raw"], ["data", "logs", "raw"], ["data", "knowledge", "raw"]]) {
+    mkdirSync(resolve(root, ...relative), { recursive: true });
+  }
+  const demoFiles = ["sample_logs.jsonl", "sample_kpi.csv", "sample_incidents.json", "sample_ground_truth.json", "sample_knowledge.json", "sample_scenarios.json"];
+  if (demoFiles.some((name) => !existsSync(resolve(root, "data", "demo", name)))) {
+    console.log(paint.yellow("Creating the synthetic demo dataset..."));
     run(python, [resolve(root, "scripts", "generate_synthetic_data.py")]);
   }
-  console.log(paint.green("✓ Environment siap\n"));
+  console.log(paint.green("✓ Environment ready\n"));
 }
 
 function start(label, command, args, cwd, env = {}) {
@@ -121,7 +125,7 @@ function start(label, command, args, cwd, env = {}) {
   child.on("exit", (code, signal) => {
     children.delete(child);
     if (!shuttingDown && code !== 0) {
-      console.error(paint.red(`${label} berhenti (code ${code ?? signal}).`));
+      console.error(paint.red(`${label} stopped (code ${code ?? signal}).`));
       shutdown(code ?? 1);
     }
   });
@@ -140,7 +144,7 @@ async function waitFor(url, label, attempts = 90) {
     } catch {}
     await new Promise((resolveWait) => setTimeout(resolveWait, 500));
   }
-  throw new Error(`${label} tidak merespons di ${url}`);
+  throw new Error(`${label} did not respond at ${url}`);
 }
 
 let shuttingDown = false;
@@ -159,12 +163,17 @@ function shutdown(code = 0) {
 setup();
 const fileEnvironment = localEnvironment();
 if (setupOnly) process.exit(0);
+const runtimeSecret = process.env.JWT_SECRET || fileEnvironment.JWT_SECRET || randomBytes(48).toString("base64url");
+console.log(paint.yellow("Applying database migrations…"));
+run(python, ["-m", "alembic", "-c", "alembic.ini", "upgrade", "head"], {
+  cwd: backendDir,
+  env: { ...process.env, ...fileEnvironment, APP_ENV: "development", JWT_SECRET: runtimeSecret },
+});
 ensureLocalOpenSearch(fileEnvironment);
 
 process.on("SIGINT", () => shutdown(0));
 process.on("SIGTERM", () => shutdown(0));
 
-const runtimeSecret = process.env.JWT_SECRET || fileEnvironment.JWT_SECRET || randomBytes(48).toString("base64url");
 start("Backend", python, ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"], backendDir, {
   ...fileEnvironment,
   APP_ENV: "development",
@@ -191,7 +200,7 @@ if (backendOnly) {
     console.log("\n  Login     : admin@5grca.local / admin123");
     console.log("  Stop      : Ctrl+C\n");
   } catch (error) {
-    console.error(paint.red(`\nStartup gagal: ${error.message}`));
+    console.error(paint.red(`\nStartup failed: ${error.message}`));
     shutdown(1);
   }
 }

@@ -1,6 +1,6 @@
 # 5G RCA Copilot — Codebase Guide dan Technical Audit
 
-Dokumen ini menjelaskan kondisi codebase pada 12 Agustus 2026: tujuan sistem, arsitektur, cara kerja setiap lapisan, model data, API, aliran retrieval/RCA, keamanan, pengalaman pengguna, deployment, testing, serta gap yang masih perlu diselesaikan menuju production.
+Dokumen ini menjelaskan kondisi codebase pada 18 Agustus 2026: tujuan sistem, arsitektur, cara kerja setiap lapisan, model data, API, aliran retrieval/RCA, keamanan, pengalaman pengguna, deployment, testing, serta gap yang masih perlu diselesaikan menuju production.
 
 ## 1. Ringkasan produk
 
@@ -66,6 +66,7 @@ FastAPI backend (port 8000, loopback pada local launcher)
   ├── SQLAlchemy ── SQLite local / PostgreSQL Docker
   ├── LogStore ──── JSONL display source + required OpenSearch retrieval
   ├── Retrieval ─── OpenSearch BM25 + Sentence Transformer kNN + score fusion
+  ├── Knowledge ─── separate OpenSearch runbook index for resolution guidance
   └── LLM adapter ─ Ollama + deterministic safe fallback
 ```
 
@@ -85,9 +86,12 @@ Frontend tidak berkomunikasi langsung dengan OpenSearch. Semua request browser m
 │   │   └── services/
 │   │       ├── embeddings.py        lazy Sentence Transformer encoder
 │   │       ├── log_store.py         OpenSearch indexing dan hybrid search
+│   │       ├── domain_mapping.py    KPI → interface → component mapping
+│   │       ├── metrics.py           demo/private-local KPI provider
+│   │       ├── knowledge.py         separate knowledge indexing/retrieval
 │   │       ├── retrieval.py         context, fusion result, evidence bundle
 │   │       └── llm.py               Ollama dan safe fallback
-│   ├── alembic/                     baseline migration
+│   ├── alembic/                     versioned schema migrations
 │   ├── tests/                       API dan retrieval tests
 │   ├── Dockerfile
 │   └── requirements.txt
@@ -101,15 +105,21 @@ Frontend tidak berkomunikasi langsung dengan OpenSearch. Semua request browser m
 │   ├── next.config.ts               API proxy dan security headers
 │   ├── Dockerfile
 │   └── package.json
-├── data/                             synthetic logs/incidents/truth
+├── data/
+│   ├── demo/                         committed synthetic KPI/log/incident/truth/knowledge data
+│   ├── kpi/raw/                      ignored private historical KPI input
+│   ├── logs/raw/                     ignored private operational logs
+│   └── knowledge/raw/                ignored private runbooks and references
+├── config/domain/                    deterministic KPI and interface mappings
 ├── scripts/
 │   ├── dev.mjs                       one-command orchestrator
 │   ├── test.mjs                      combined verification
-│   └── generate_synthetic_data.py    deterministic data generator
+│   ├── generate_synthetic_data.py    deterministic data generator
+│   └── validate_demo_data.py         cross-source alignment validator
 ├── docker-compose.yml
 ├── .env.example
 ├── package.json                      root commands
-└── PRD — 5G RCA.md
+└── docs/PRD_MULTI_SOURCE_RAG_RCA.md   current product source of truth
 ```
 
 Generated directories seperti `.next`, `.venv`, `node_modules`, `.uv-cache`, database SQLite, dan runtime log tidak disimpan dalam Git.
@@ -133,7 +143,7 @@ Generated directories seperti `.next`, `.venv`, `node_modules`, `.uv-cache`, dat
 
 `LogWorkspace` dipakai oleh Operations dan Log Explorer. Perbedaan mode dijaga melalui prop `explorer`: Operations membuka SSE sedangkan Explorer fokus pada pencarian historis. Keyword search memiliki debounce 350 ms, filter change membersihkan selection agar konteks tidak stale, dan error API tampil sebagai banner dengan Retry. Selection toolbar menjalankan tiga aksi nyata: Analyze with AI, Related Logs, dan Create Incident. Aksi yang sama tersedia dari log detail drawer.
 
-`AssistantPanel` mengirim selected log IDs, selected nodes, severity, dan keyword sebagai `ui_context`. Hasil menampilkan summary, likely root cause, affected components, reasoning, evidence, recommendation, retrieval detail, serta grouped bar chart BM25/Semantic/Final score. Evidence dapat diklik untuk membuka drawer raw JSON. Panel menggunakan scroll container tersendiri sehingga hasil panjang tidak menggeser viewport utama ke bawah.
+`AssistantPanel` mengirim selected log IDs, selected nodes, severity, keyword, dan konteks KPI sebagai `ui_context`. Hasil menampilkan summary, likely root cause, affected components/interfaces, investigation guidance, resolution suggestions, KPI/topology/log evidence, serta grouped bar chart BM25/Semantic/Final score. Evidence log dapat diklik untuk membuka drawer raw JSON. Panel menggunakan scroll container tersendiri sehingga hasil panjang tidak menggeser viewport utama ke bawah.
 
 Dropdown Operations, Incidents, Users, dan Evaluation memiliki pilihan eksplisit serta empty/loading option yang sesuai konteks. Badge Incidents mengambil jumlah incident aktif dari API dan diperbarui setelah create/status update.
 
@@ -198,19 +208,19 @@ Model penting:
 - `Incident`, `IncidentNode`, `IncidentMetadata`;
 - `Conversation`, `Message`;
 - `Analysis`, `AnalysisEvidence`;
-- `EvaluationRun`, `GroundTruth`;
+- `EvaluationRun`, `GroundTruth`, `KnowledgeDocument`;
 - `AuditLog`.
 
 Prototype menyimpan `result_json`, `evidence_json`, dan `ui_context` langsung pada `Analysis`. Ini menyederhanakan demo, tetapi berbeda dari normalisasi penuh PRD (`analysis_results` dan `analysis_context` terpisah). Uploaded dataset sementara diserialisasi melalui record Dataset; production perlu object storage/staging table yang terpisah.
 
-Alembic menyediakan baseline `0001_initial`. Startup juga memanggil `create_all` agar demo kosong langsung dapat dipakai. Pada production, migration harus menjadi satu-satunya mekanisme perubahan schema.
+Alembic menyediakan baseline `0001_initial`, dataset error migration `0002`, dan ground-truth/knowledge migration `0003`. Startup juga memanggil `create_all` agar demo kosong langsung dapat dipakai. Pada production, migration harus menjadi satu-satunya mekanisme perubahan schema.
 
 ## 7. Hybrid retrieval dan RCA
 
 Pipeline berada pada `backend/app/services/retrieval.py`:
 
 ```text
-Question + UI context
+English question + KPI/UI context
   → timestamp/node/severity/trace/session candidate filtering
   → OpenSearch multi_match BM25
   → Sentence Transformer query embedding
@@ -218,9 +228,9 @@ Question + UI context
   → per-channel min-max normalization
   → alpha-weighted score fusion
   → selected-log boost
-  → rank, deduplication, Top-K
+  → transient-noise filtering, rank, deduplication, Top-K
   → chronological ordered context
-  → EvidenceBundle
+  → EvidenceBundle (`K*` KPI, `T*` topology, `L*` log, `R*` knowledge)
 ```
 
 Rumus fusion:
@@ -235,17 +245,18 @@ Default `alpha=0.5`, `top_k=10`, dan incident window ±5 menit. `Search More Evi
 
 Runtime tidak menggunakan in-memory retrieval fallback. Ketika OpenSearch/model/index belum sehat, endpoint retrieval mengembalikan HTTP 503; test suite menggunakan deterministic search double yang hanya aktif di test.
 
-`llm.py` memanggil Ollama `/api/chat` dengan structured JSON prompt. Jika runtime tidak tersedia atau output invalid, deterministic mock-safe provider menghasilkan RCA berbasis evidence. Semua `evidence_ids` divalidasi terhadap bundle; ID di luar bundle dibuang dan fallback aman dipakai apabila tidak tersisa citation valid.
+`llm.py` memanggil Ollama `/api/chat` dengan structured JSON prompt berbahasa Inggris. Jika runtime tidak tersedia atau output invalid, deterministic MockProvider menyusun RCA dari urutan evidence, bukan response skenario yang di-hardcode. Semua `evidence_ids` divalidasi terhadap bundle; ID di luar bundle dibuang dan fallback aman dipakai apabila tidak tersisa citation valid. Ketika KPI evidence ada tetapi operational log hanya kosong atau berisi transient noise, policy layer selalu abstain dengan `INSUFFICIENT_EVIDENCE` sebelum provider dipanggil.
 
 ## 8. Synthetic data dan evaluation
 
-Generator bersifat deterministic (`random.seed(42)`) dan menghasilkan 400 record dengan mayoritas noise normal. Tiga scenario:
+Generator bersifat deterministic (`random.seed(42)`) dan menghasilkan 400 log, 240 KPI point, empat incident, tiga knowledge document, dan empat ground-truth scenario. Scenario:
 
 1. PFCP association degradation → timeout SMF → PDU session failure;
 2. AMF control-plane timeout → retry → UE registration failure;
 3. UPF packet drop → QoS degradation → user-plane failure.
+4. N7 KPI degradation tanpa log kausal → mandatory abstention.
 
-Ground truth menghubungkan tiap incident dengan relevant log IDs. Evaluation Lab menghitung Precision@K, Recall@K, Hit Rate@K, MRR, context precision/recall, dan retrieval latency pada tiga scenario tersebut. Sampel ini cukup untuk demo, tetapi terlalu kecil untuk klaim performa akademik yang kuat; eksperimen final perlu dataset, query, dan annotator yang lebih beragam.
+Ground truth menghubungkan setiap incident ke KPI, interface, component, relevant log ID, knowledge ID, dan expected RCA status. Evaluation Lab menghitung Precision@K, Recall@K, Hit Rate@K, MRR, knowledge hit rate, interface recall, context precision/recall, dan retrieval latency. Sampel ini cukup untuk demo, tetapi terlalu kecil untuk klaim performa akademik yang kuat; eksperimen final perlu dataset, query, dan annotator yang lebih beragam.
 
 ## 9. Security review
 
@@ -258,7 +269,7 @@ Ground truth menghubungkan tiap incident dengan relevant log IDs. Evaluation Lab
 - dummy password verification untuk mengurangi user enumeration berbasis timing;
 - ADMIN dependency untuk user management dan delete dataset;
 - input length, enum, upload size, record count, timestamp, severity, dan field validation;
-- maximum upload 10 MB dan 50.000 record;
+- configurable maximum upload 250 MB dan 1.000.000 record pada default development profile;
 - short-lived 60-second SSE ticket agar access token tidak muncul di URL/access log;
 - security headers: no-sniff, frame deny, no-referrer, restricted permissions dan CSP baseline;
 - no-store untuk API response;
@@ -309,7 +320,7 @@ Audit dependency terakhir setelah upgrade Next.js 16.3.0 menghasilkan **0 vulner
 
 ## 11. Configuration
 
-`.env.example` mendokumentasikan database, JWT, OpenSearch, embedding, retrieval, Ollama, polling, demo seed, dan CORS. Untuk local one-command launcher, salin `.env.local.example` menjadi `.env.local`; `scripts/dev.mjs` akan membacanya untuk backend. Langkah SQLite/PostgreSQL/Ollama lengkap tersedia di `DATABASE_AND_AI_SETUP.md`.
+`.env.example` mendokumentasikan database, JWT, OpenSearch, embedding, retrieval, KPI source, Ollama, polling, demo seed, dan CORS. Untuk local one-command launcher, salin `.env.local.example` menjadi `.env.local`; `scripts/dev.mjs` akan membacanya untuk backend. Langkah SQLite/PostgreSQL/OpenSearch/KPI/Ollama lengkap tersedia di `docs/DATABASE_AND_AI_SETUP.md`.
 
 Production minimum:
 
@@ -333,7 +344,7 @@ npm test
 
 Perintah ini menjalankan:
 
-1. `pytest -q` untuk API login/log/analysis, evidence validation, stream ticket, PFCP ranking, context filtering, Related Logs, create/update Incident, create/update User, indexing Dataset, dan Evaluation;
+1. `pytest -q` untuk API, retrieval, volume indexing, provider schema, Scenario 01 cross-source flow, MockProvider grounding, dan insufficient-evidence abstention;
 2. `next build` untuk TypeScript checking dan optimized production compilation.
 
 Test backend memakai SQLite in-memory melalui `tests/conftest.py`, sehingga tidak membaca atau memodifikasi database development.

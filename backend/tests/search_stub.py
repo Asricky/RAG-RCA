@@ -18,9 +18,13 @@ class SearchStub:
         rows = list(self.logs)
         if filters.get("nodes"):
             rows = [row for row in rows if row["node"] in filters["nodes"]]
+        if filters.get("components"):
+            rows = [row for row in rows if row["component"] in filters["components"]]
+        if filters.get("interfaces"):
+            rows = [row for row in rows if row.get("interface") in filters["interfaces"]]
         if filters.get("severities"):
             rows = [row for row in rows if row["severity"] in filters["severities"]]
-        for field in ("trace_id", "session_id"):
+        for field in ("trace_id", "session_id", "error_code"):
             if filters.get(field):
                 rows = [row for row in rows if row.get(field) == filters[field]]
         if filters.get("time_from"):

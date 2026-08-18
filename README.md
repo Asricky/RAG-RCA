@@ -1,74 +1,126 @@
 # 5G RCA Copilot
 
-Prototype observability dan root cause analysis untuk log 5G Core. Aplikasi menyediakan dashboard Next.js, API FastAPI, autentikasi role-based, hybrid retrieval, evidence bundle, RCA berbasis evidence, synthetic dataset, incident management, upload dataset, dan evaluation lab.
+5G RCA Copilot is an evidence-grounded observability and root cause analysis prototype for 5G Core operations. It combines KPI context, topology mappings, OpenSearch BM25 + Sentence Transformer kNN retrieval, operational logs, and an English-only AI Assistant.
 
-## Menjalankan aplikasi
+The repository ships only with sanitized synthetic demo data. Real KPI, log, and knowledge data must remain local and must never be committed.
 
-Dari direktori root, cukup jalankan:
+## Run the local demo
+
+Prerequisites:
+
+- Node.js 20 or newer;
+- [`uv`](https://docs.astral.sh/uv/) for the Python environment;
+- Docker Desktop for OpenSearch retrieval;
+- [Ollama](https://ollama.com/) for the default local AI provider.
+
+Start Docker Desktop and wait until its engine is ready. Verify it from PowerShell:
+
+```powershell
+docker info
+docker compose up -d opensearch
+docker compose ps
+```
+
+Prepare the default Ollama model once:
+
+```powershell
+ollama pull llama3.2:3b
+ollama list
+```
+
+If the Ollama Windows service is not already active, keep `ollama serve` running in a separate terminal.
+
+From the repository root, run:
 
 ```powershell
 npm run dev
 ```
 
-Perintah tersebut otomatis:
+The launcher installs missing dependencies, creates the safe demo dataset when needed, applies database migrations, starts OpenSearch through Docker, starts FastAPI on port `8000`, loads demo records into SQLite, indexes logs and knowledge in separate OpenSearch indices, and starts Next.js on port `3000`.
 
-1. membuat Python virtual environment jika belum ada;
-2. memasang dependency backend dan frontend jika dibutuhkan;
-3. membuat synthetic dataset jika belum tersedia;
-4. menyalakan container OpenSearch bila Docker Desktop tersedia;
-5. menjalankan FastAPI pada port `8000`;
-6. menjalankan Next.js pada port `3000`;
-7. menampilkan URL setelah kedua service aplikasi siap.
-
-Jika Docker Desktop belum aktif, dashboard dan log viewer tetap menyala, tetapi Analyze with AI/Evaluation akan mengembalikan `503` sampai OpenSearch tersedia. Aktifkan Docker Desktop lalu restart perintah yang sama.
-
-Buka <http://localhost:3000> dan login dengan:
+Open <http://localhost:3000> and sign in with:
 
 ```text
-Email    : admin@5grca.local
-Password : admin123
+Email:    admin@5grca.local
+Password: admin123
 ```
 
-Hentikan seluruh service dengan `Ctrl+C` pada terminal yang sama.
+Stop all launcher-managed services with `Ctrl+C`.
 
-### Akses dari perangkat lain
+If Ollama is unavailable, the default configuration uses a deterministic evidence-safe generation fallback so the UI can still be demonstrated. OpenSearch remains required because production retrieval deliberately has no in-memory semantic fallback.
 
-Gunakan mode LAN secara eksplisit:
+## Demo workflow
+
+1. Open **Live Operations**.
+2. Select **PDU SESSION ESTABLISHMENT SUCCESS RATIO** on `SMF-01`.
+3. Review the KPI chart, related interfaces, and correlated logs.
+4. Click **Analyze with AI**.
+5. Ask `Why did the PDU session establishment success ratio degrade on SMF-01?`.
+6. Inspect KPI (`K*`), topology (`T*`), log (`L*`), and knowledge (`R*`) citations in the answer.
+7. Confirm that the suggested resolution cites the synthetic PFCP runbook rather than uncited model knowledge.
+
+The assistant must return `INSUFFICIENT_EVIDENCE` instead of claiming a root cause when KPI evidence exists but no supporting operational log evidence can be retrieved.
+
+## Data safety and KPI modes
+
+```text
+data/demo/           committed sanitized demo data
+data/kpi/raw/        local-only historical KPI files
+data/logs/raw/       local-only operational logs
+data/knowledge/raw/  local-only runbooks and references
+```
+
+All `raw/` and `processed/` research paths are ignored by Git. The default `KPI_SOURCE=demo` reads `data/demo/sample_kpi.csv`. To replay local historical KPI CSV files, copy them under `data/kpi/raw/` and set this in `.env.local`:
+
+```env
+KPI_SOURCE=raw
+KPI_RAW_DIR=./data/kpi/raw
+```
+
+If the raw directory is empty, the application safely falls back to the sanitized demo KPI dataset. It never copies raw source files into a committed directory.
+
+## Useful commands
 
 ```powershell
-npm run dev:lan
+npm run dev           # full localhost demo
+npm run dev:lan       # expose the frontend to devices on the same LAN
+npm run setup         # install dependencies and prepare directories only
+npm test              # backend tests followed by a frontend production build
+npm run build         # frontend production build
+npm run data:generate # regenerate all deterministic synthetic demo sources
+npm run data:validate # validate cross-source KPI/log/knowledge alignment
+npm run dev:backend   # backend only
 ```
 
-Launcher akan menampilkan URL LAN, misalnya `http://10.x.x.x:3000`. Perangkat harus berada pada jaringan yang sama dan Windows Firewall harus mengizinkan TCP port `3000`. Mode `npm run dev` biasa hanya bind ke localhost untuk keamanan.
+API documentation is available at <http://localhost:8000/docs> while the backend is running.
 
-### Perintah lain
-
-```powershell
-npm run setup          # hanya menyiapkan dependency
-npm test               # backend tests + frontend production build
-npm run build          # frontend production build
-npm run data:generate  # regenerasi 400 synthetic logs
-npm run dev:backend    # hanya FastAPI
-```
-
-API documentation tersedia di <http://localhost:8000/docs> ketika aplikasi berjalan.
-
-## Docker Compose
-
-Untuk PostgreSQL dan OpenSearch:
+To run every application service in containers instead, use:
 
 ```powershell
 Copy-Item .env.example .env
-# Isi JWT_SECRET dengan nilai acak yang kuat
 docker compose up --build
 ```
 
-OpenSearch dan backend hanya dipublikasikan pada loopback host; browser mengakses API melalui reverse proxy Next.js. Retrieval RCA menggunakan BM25 OpenSearch dan kNN dengan embedding `sentence-transformers/all-MiniLM-L6-v2`. OpenSearch wajib aktif untuk Analyze with AI dan Evaluation; aplikasi mengembalikan status `503` yang jelas bila retrieval belum siap. Ollama diharapkan berjalan pada host port `11434`; jika Ollama tidak tersedia, generation tetap dapat memakai mock-safe RCA berbasis evidence hasil OpenSearch.
+The host-based `npm run dev` profile is recommended for normal development because Next.js and FastAPI reload automatically. Stop container services with `docker compose down`; named database and OpenSearch volumes are preserved.
 
-## Dokumentasi
+For LAN mode, allow inbound TCP port `3000` in Windows Firewall. The API and OpenSearch remain bound to loopback; the Next.js server proxies browser API requests.
 
-Penjelasan arsitektur, struktur modul, aliran data, API, database, keamanan, hasil audit, testing, dan gap terhadap PRD tersedia di [CODEBASE.md](CODEBASE.md).
+## Configuration
 
-Panduan terperinci untuk SQLite/PostgreSQL, Docker database, OpenSearch, serta koneksi model Ollama tersedia di [DATABASE_AND_AI_SETUP.md](DATABASE_AND_AI_SETUP.md).
+Copy the local example before changing defaults:
 
-Semua data bawaan bersifat sintetis dan tidak mengandung data customer.
+```powershell
+Copy-Item .env.local.example .env.local
+```
+
+Ollama is the default no-paid-API provider. OpenAI is optional and server-side only. Never place provider keys in frontend environment variables or commit `.env.local`.
+
+See [CODEBASE.md](CODEBASE.md) for the architecture and [docs/DATABASE_AND_AI_SETUP.md](docs/DATABASE_AND_AI_SETUP.md) for database, retrieval, KPI, and AI provider setup.
+
+## Startup troubleshooting
+
+- `docker info` fails: start Docker Desktop, then rerun `npm run dev`.
+- OpenSearch is still starting: inspect `docker compose logs opensearch` and wait for `http://127.0.0.1:9200/_cluster/health`.
+- The first analysis is slow: allow the Sentence Transformer model to finish loading and indexing 400 demo logs.
+- Ollama is unavailable: run `ollama serve`, check `ollama list`, and verify the configured model name. The safe mock fallback remains available.
+- Port `3000` or `8000` is occupied: stop the older launcher with `Ctrl+C` before starting a new one.

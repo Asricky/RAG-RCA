@@ -50,6 +50,7 @@ class Dataset(Base):
     valid_records: Mapped[int] = mapped_column(Integer, default=0)
     rejected_records: Mapped[int] = mapped_column(Integer, default=0)
     indexed_records: Mapped[int] = mapped_column(Integer, default=0)
+    index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     uploaded_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -172,9 +173,28 @@ class GroundTruth(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     incident_id: Mapped[str] = mapped_column(ForeignKey("incidents.id"))
     root_cause: Mapped[str] = mapped_column(Text)
+    question: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kpi_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     evidence_log_ids: Mapped[list] = mapped_column(JSON, default=list)
+    expected_interfaces: Mapped[list] = mapped_column(JSON, default=list)
+    expected_components: Mapped[list] = mapped_column(JSON, default=list)
+    expected_knowledge_ids: Mapped[list] = mapped_column(JSON, default=list)
+    expected_status: Mapped[str] = mapped_column(String(50), default="SUPPORTED")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     validated_by: Mapped[str] = mapped_column(String(255), default="Synthetic benchmark")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    document_code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    document_type: Mapped[str] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(255))
+    version: Mapped[str] = mapped_column(String(50), default="1.0")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    document_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

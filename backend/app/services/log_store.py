@@ -1,6 +1,8 @@
 import base64
+import heapq
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -16,25 +18,44 @@ class LogStore:
     def __init__(self):
         self._lock = threading.Lock()
         self.logs: list[dict] = []
+        self._log_ids: set[str] = set()
         self.opensearch_status = "Unavailable"
         self.last_error = ""
 
     def load(self, path: Path | None = None) -> None:
-        source = path or settings.data_dir / "sample_logs.jsonl"
+        source = path or settings.demo_data_dir / "sample_logs.jsonl"
         if source.exists():
             with source.open("r", encoding="utf-8") as handle:
                 loaded = [json.loads(line) for line in handle if line.strip()]
             with self._lock:
-                self.logs = sorted(loaded, key=lambda item: item["@timestamp"], reverse=True)
+                self.logs = sorted(loaded, key=lambda item: item["@timestamp"], reverse=True)[: settings.log_memory_limit]
+                self._log_ids = {item["log_id"] for item in self.logs}
+
+    def add_to_memory(self, logs: list[dict]) -> int:
+        with self._lock:
+            added = [item for item in logs if item["log_id"] not in self._log_ids]
+            self.logs.extend(added)
+            self.logs = sorted(self.logs, key=lambda item: item["@timestamp"], reverse=True)[: settings.log_memory_limit]
+            self._log_ids = {item["log_id"] for item in self.logs}
+        return len(added)
 
     def add_many(self, logs: list[dict]) -> None:
+        if logs and self.opensearch_status == "Healthy":
+            self.index_documents(logs)
+        self.add_to_memory(logs)
+
+    def cache_dataset(self, logs, limit: int | None = None) -> int:
+        available = max(0, settings.log_memory_limit - len(self.logs))
+        keep = min(available, limit or settings.log_memory_limit)
+        if not keep:
+            return 0
+        newest = heapq.nlargest(keep, logs, key=lambda item: item.get("@timestamp", ""))
+        return self.add_to_memory(newest)
+
+    def remove_dataset_from_memory(self, dataset_id: str) -> None:
         with self._lock:
-            existing = {item["log_id"] for item in self.logs}
-            added = [item for item in logs if item["log_id"] not in existing]
-            self.logs.extend(added)
-            self.logs.sort(key=lambda item: item["@timestamp"], reverse=True)
-        if added and self.opensearch_status == "Healthy":
-            self.index_documents(added)
+            self.logs = [item for item in self.logs if item.get("dataset_id") != dataset_id]
+            self._log_ids = {item["log_id"] for item in self.logs}
 
     def get(self, log_id: str) -> dict | None:
         return next((item for item in self.logs if item["log_id"] == log_id), None)
@@ -46,6 +67,8 @@ class LogStore:
             value = filters.get(key)
             if value:
                 rows = [row for row in rows if str(row.get(key, "")).lower() == str(value).lower()]
+        if filters.get("dataset_id"):
+            rows = [row for row in rows if row.get("source_dataset_id") == filters["dataset_id"] or row.get("dataset_id") == filters["dataset_id"]]
         if keyword:
             rows = [row for row in rows if keyword in row.get("search_text", row.get("message", "")).lower()]
         time_from = _parse_time(filters.get("time_from"))
@@ -106,6 +129,7 @@ class LogStore:
                     raise
                 self._request("PUT", f"/{settings.opensearch_index}", self._index_mapping())
             self._validate_index()
+            self._ensure_dataset_mapping()
             self.index_documents(self.logs)
             self.opensearch_status = "Healthy"
             self.last_error = ""
@@ -123,9 +147,13 @@ class LogStore:
                 },
                 "properties": {
                     "log_id": {"type": "keyword"},
+                    "dataset_id": {"type": "keyword"},
+                    "source_dataset_id": {"type": "keyword"},
+                    "original_log_id": {"type": "keyword"},
                     "@timestamp": {"type": "date"},
                     "node": {"type": "keyword"},
                     "component": {"type": "keyword"},
+                    "interface": {"type": "keyword"},
                     "severity": {"type": "keyword"},
                     "message": {"type": "text"},
                     "trace_id": {"type": "keyword"},
@@ -155,13 +183,20 @@ class LogStore:
         metadata = current.get("_meta", {})
         if vector.get("dimension") != settings.embedding_dimension or metadata.get("embedding_model") != settings.embedding_model:
             raise RuntimeError(
-                f"Index {settings.opensearch_index} tidak kompatibel dengan {settings.embedding_model}. "
-                "Gunakan nama OPENSEARCH_INDEX baru atau recreate index tersebut."
+                f"Index {settings.opensearch_index} is incompatible with {settings.embedding_model}. "
+                "Use a new OPENSEARCH_INDEX name or recreate the development index."
             )
 
-    def index_documents(self, logs: list[dict]) -> None:
+    def _ensure_dataset_mapping(self) -> None:
+        self._request("PUT", f"/{settings.opensearch_index}/_mapping", {"properties": {
+            "source_dataset_id": {"type": "keyword"},
+            "original_log_id": {"type": "keyword"},
+            "interface": {"type": "keyword"},
+        }})
+
+    def _bulk_index(self, logs: list[dict], refresh: bool) -> int:
         if not logs:
-            return
+            return 0
         texts = [str(item.get("search_text") or item.get("message") or "") for item in logs]
         vectors = embedding_encoder.encode_documents(texts)
         lines: list[str] = []
@@ -172,19 +207,62 @@ class LogStore:
             document["embedding_model"] = settings.embedding_model
             lines.append(json.dumps(document))
         payload = ("\n".join(lines) + "\n").encode("utf-8")
-        result = self._request("POST", "/_bulk?refresh=true", payload, "application/x-ndjson")
+        path = f"/_bulk?refresh={'true' if refresh else 'false'}"
+        result = None
+        for attempt in range(settings.index_max_retries + 1):
+            try:
+                result = self._request("POST", path, payload, "application/x-ndjson")
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code not in {429, 502, 503, 504} or attempt >= settings.index_max_retries:
+                    raise
+                time.sleep(min(4.0, 0.5 * (2**attempt)))
+            except (urllib.error.URLError, TimeoutError):
+                if attempt >= settings.index_max_retries:
+                    raise
+                time.sleep(min(4.0, 0.5 * (2**attempt)))
+        if result is None:
+            raise RuntimeError("OpenSearch bulk indexing returned no response")
         if result.get("errors"):
             failures = [item for row in result.get("items", []) for item in row.values() if item.get("error")]
-            raise RuntimeError(f"OpenSearch bulk indexing gagal untuk {len(failures)} dokumen")
+            raise RuntimeError(f"OpenSearch bulk indexing failed for {len(failures)} documents")
+        return len(logs)
+
+    def index_documents(self, logs: list[dict], refresh: bool = True) -> int:
+        indexed = 0
+        for offset in range(0, len(logs), settings.index_batch_size):
+            batch = logs[offset : offset + settings.index_batch_size]
+            last_batch = offset + settings.index_batch_size >= len(logs)
+            indexed += self._bulk_index(batch, refresh=refresh and last_batch)
+        return indexed
+
+    def refresh_index(self) -> None:
+        self._request("POST", f"/{settings.opensearch_index}/_refresh")
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        if self.opensearch_status != "Healthy":
+            raise RuntimeError("OpenSearch is not ready to delete dataset documents")
+        self._request(
+            "POST",
+            f"/{settings.opensearch_index}/_delete_by_query?refresh=true&conflicts=proceed",
+            {"query": {"term": {"source_dataset_id": dataset_id}}},
+        )
+        self.remove_dataset_from_memory(dataset_id)
 
     @staticmethod
     def _filter_clauses(filters: dict) -> list[dict]:
         clauses: list[dict] = []
         if filters.get("nodes"):
             clauses.append({"terms": {"node": filters["nodes"]}})
+        if filters.get("components"):
+            clauses.append({"terms": {"component": filters["components"]}})
+        if filters.get("interfaces"):
+            clauses.append({"terms": {"interface": filters["interfaces"]}})
+        if filters.get("dataset_id"):
+            clauses.append({"term": {"source_dataset_id": filters["dataset_id"]}})
         if filters.get("severities"):
             clauses.append({"terms": {"severity": filters["severities"]}})
-        for key in ("trace_id", "session_id"):
+        for key in ("trace_id", "session_id", "error_code"):
             if filters.get(key):
                 clauses.append({"term": {key: filters[key]}})
         bounds = {}
@@ -208,7 +286,7 @@ class LogStore:
     def hybrid_search(self, query: str, filters: dict, top_k: int, alpha: float, selected_ids: set[str]) -> tuple[list[dict], int]:
         if self.opensearch_status != "Healthy":
             detail = f": {self.last_error}" if self.last_error else ""
-            raise RetrievalUnavailable(f"OpenSearch retrieval belum siap{detail}")
+            raise RetrievalUnavailable(f"OpenSearch retrieval is not ready{detail}")
         candidate_size = min(500, max(50, top_k * 5))
         clauses = self._filter_clauses(filters)
         filter_query = {"bool": {"filter": clauses}} if clauses else {"match_all": {}}

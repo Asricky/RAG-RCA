@@ -14,11 +14,30 @@ def test_login_logs_and_analysis():
         assert logs.status_code==200 and logs.json()["total"]>=3
         ticket=client.post("/api/logs/stream-ticket",headers=headers)
         assert ticket.status_code==200 and ticket.json()["expires_in"]==60
-        analysis=client.post("/api/analysis/run",headers=headers,json={"question":"Apa root cause PFCP timeout?","ui_context":{"selected_nodes":["SMF-01","UPF-01"]},"retrieval_config":{"top_k":5,"alpha":.5}})
+        analysis=client.post("/api/analysis/run",headers=headers,json={"question":"What caused the PFCP timeout?","ui_context":{"selected_nodes":["SMF-01","UPF-01"]},"retrieval_config":{"top_k":5,"alpha":.5}})
         assert analysis.status_code==200
         payload=analysis.json()
-        valid={x["evidence_id"] for x in payload["evidence_bundle"]["evidence_logs"]}
+        valid={x["evidence_id"] for key in ("kpi_evidence", "topology_evidence", "log_evidence", "knowledge_evidence") for x in payload["evidence_bundle"][key]}
         assert set(payload["rca_result"]["evidence_ids"])<=valid
+
+        metrics = client.get("/api/metrics/kpis", headers=headers)
+        assert metrics.status_code == 200
+        assert metrics.json()["source"] == "demo"
+        assert metrics.json()["items"]
+
+        kpi = metrics.json()["items"][0]
+        series = client.get("/api/metrics/series", headers=headers, params={"kpi_name": kpi["kpi_name"], "node": kpi["node"]})
+        assert series.status_code == 200
+        assert series.json()["context"]["kpi_name"] == kpi["kpi_name"]
+        assert series.json()["points"]
+
+        kpi_analysis = client.post("/api/analysis/run", headers=headers, json={
+            "question": "What caused the selected KPI degradation during this interval?",
+            "ui_context": {"incident_timestamp": kpi["timestamp"], "kpi_context": kpi},
+            "retrieval_config": {"top_k": 5, "alpha": .5},
+        })
+        assert kpi_analysis.status_code == 200
+        assert kpi_analysis.json()["evidence_bundle"]["kpi_evidence"][0]["evidence_id"] == "K1"
 
         analyst_login=client.post("/api/auth/login",json={"email":"analyst@5grca.local","password":"analyst123"})
         analyst_headers={"Authorization":f"Bearer {analyst_login.json()['access_token']}"}

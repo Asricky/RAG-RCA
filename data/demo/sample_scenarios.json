@@ -1,0 +1,108 @@
+[
+  {
+    "scenario_id": "SCENARIO-01",
+    "incident_code": "INC-001",
+    "question": "Why did the PDU session establishment success ratio degrade on SMF-01?",
+    "kpi_name": "PDU_SESSION_ESTABLISHMENT_SUCCESS_RATIO",
+    "root_cause": "PFCP association degradation between SMF-01 and UPF-01",
+    "evidence_log_ids": [
+      "LOG-0032",
+      "LOG-0033",
+      "LOG-0034",
+      "LOG-0035",
+      "LOG-0036"
+    ],
+    "expected_interfaces": [
+      "N4",
+      "N11"
+    ],
+    "expected_components": [
+      "AMF",
+      "SMF",
+      "UPF"
+    ],
+    "expected_knowledge_ids": [
+      "KB-PFCP-001"
+    ],
+    "expected_status": "SUPPORTED",
+    "notes": "Synthetic Scenario 01"
+  },
+  {
+    "scenario_id": "SCENARIO-02",
+    "incident_code": "INC-002",
+    "question": "What caused the initial registration KPI degradation?",
+    "kpi_name": "INITIAL_REGISTRATION_SUCCESS_RATIO",
+    "root_cause": "Authentication response timeout on the AMF control-plane path",
+    "evidence_log_ids": [
+      "LOG-0177",
+      "LOG-0178",
+      "LOG-0179",
+      "LOG-0180"
+    ],
+    "expected_interfaces": [
+      "N1",
+      "N2",
+      "N8",
+      "N12"
+    ],
+    "expected_components": [
+      "AMF",
+      "AUSF",
+      "GNB",
+      "UDM",
+      "UE"
+    ],
+    "expected_knowledge_ids": [
+      "KB-REG-001"
+    ],
+    "expected_status": "SUPPORTED",
+    "notes": "Synthetic Scenario 02"
+  },
+  {
+    "scenario_id": "SCENARIO-03",
+    "incident_code": "INC-003",
+    "question": "What caused the user-plane delivery KPI degradation?",
+    "kpi_name": "USER_PLANE_PACKET_DELIVERY_SUCCESS_RATIO",
+    "root_cause": "Packet loss and QoS degradation across the N3 and N6 paths",
+    "evidence_log_ids": [
+      "LOG-0321",
+      "LOG-0322",
+      "LOG-0323",
+      "LOG-0324"
+    ],
+    "expected_interfaces": [
+      "N3",
+      "N4",
+      "N6"
+    ],
+    "expected_components": [
+      "DATA_NETWORK",
+      "GNB",
+      "SMF",
+      "UPF"
+    ],
+    "expected_knowledge_ids": [
+      "KB-UPF-001"
+    ],
+    "expected_status": "SUPPORTED",
+    "notes": "Synthetic Scenario 03"
+  },
+  {
+    "scenario_id": "SCENARIO-04",
+    "incident_code": "INC-004",
+    "question": "What caused the N7 policy association KPI degradation?",
+    "kpi_name": "N7_POLICY_ASSOCIATION_SUCCESS_RATIO",
+    "root_cause": "Insufficient operational evidence",
+    "evidence_log_ids": [],
+    "expected_interfaces": [
+      "N7"
+    ],
+    "expected_components": [
+      "PCF",
+      "SMF"
+    ],
+    "expected_knowledge_ids": [],
+    "expected_status": "INSUFFICIENT_EVIDENCE",
+    "notes": "Synthetic insufficient-evidence scenario"
+  }
+]

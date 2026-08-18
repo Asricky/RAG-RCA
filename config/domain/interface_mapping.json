@@ -1,0 +1,13 @@
+{
+  "N1": ["UE", "AMF"],
+  "N2": ["GNB", "AMF"],
+  "N3": ["GNB", "UPF"],
+  "N4": ["SMF", "UPF"],
+  "N6": ["UPF", "DATA_NETWORK"],
+  "N7": ["SMF", "PCF"],
+  "N8": ["AMF", "UDM"],
+  "N11": ["AMF", "SMF"],
+  "N12": ["AMF", "AUSF"],
+  "N35": ["UDM", "UDR"],
+  "N40": ["SMF", "CHF"]
+}

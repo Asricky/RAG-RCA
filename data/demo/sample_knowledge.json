@@ -1,0 +1,131 @@
+[
+  {
+    "document_id": "KB-PFCP-001",
+    "title": "N4 PFCP Association Recovery Runbook",
+    "document_type": "RUNBOOK",
+    "source": "Synthetic NOC knowledge base",
+    "version": "1.0",
+    "interfaces": [
+      "N4"
+    ],
+    "components": [
+      "SMF",
+      "UPF"
+    ],
+    "error_codes": [
+      "PFCP_HEARTBEAT_DELAY",
+      "PFCP_ASSOC_DEGRADED",
+      "PFCP_TIMEOUT",
+      "PDU_SESSION_FAILED"
+    ],
+    "symptoms": [
+      "missed PFCP heartbeat",
+      "PFCP request timeout",
+      "PDU session establishment failure"
+    ],
+    "content": "Use this runbook when N4 PFCP heartbeat loss is followed by association degradation and PDU session establishment failures.",
+    "investigation_steps": [
+      "Verify N4 reachability and UDP port 8805 between the affected SMF and UPF.",
+      "Check PFCP heartbeat and association state on both network functions.",
+      "Correlate the affected trace and session identifiers before changing service state."
+    ],
+    "resolution_steps": [
+      "Restore the N4 transport path if reachability is impaired.",
+      "Re-establish the PFCP association using the approved maintenance procedure after connectivity is stable.",
+      "Confirm that the PDU session success ratio returns to baseline."
+    ],
+    "recommended_action": "Restore N4 connectivity, re-establish the PFCP association under the approved procedure, and verify KPI recovery.",
+    "metadata": {
+      "synthetic": true,
+      "scenario_id": "SCENARIO-01"
+    }
+  },
+  {
+    "document_id": "KB-REG-001",
+    "title": "Initial Registration Timeout Troubleshooting Guide",
+    "document_type": "TROUBLESHOOTING_GUIDE",
+    "source": "Synthetic NOC knowledge base",
+    "version": "1.0",
+    "interfaces": [
+      "N1",
+      "N2",
+      "N8",
+      "N12"
+    ],
+    "components": [
+      "AMF",
+      "AUSF",
+      "UDM"
+    ],
+    "error_codes": [
+      "REGISTRATION_RETRY",
+      "CONTROL_PLANE_TIMEOUT",
+      "REGISTRATION_FAILED",
+      "NGAP_CONTEXT_FAILED"
+    ],
+    "symptoms": [
+      "authentication timeout",
+      "registration retry",
+      "NGAP context abort"
+    ],
+    "content": "Use this guide when UE registration failures follow authentication response timeouts and repeated retries.",
+    "investigation_steps": [
+      "Correlate the UE registration trace across N1, N2, and N12.",
+      "Verify AUSF and UDM response latency.",
+      "Check AMF saturation and timeout counters."
+    ],
+    "resolution_steps": [
+      "Restore the delayed authentication dependency.",
+      "Retry registration only after the dependency is healthy.",
+      "Verify registration success ratio recovery."
+    ],
+    "recommended_action": "Restore the delayed authentication path and confirm successful registration on a controlled test UE.",
+    "metadata": {
+      "synthetic": true,
+      "scenario_id": "SCENARIO-02"
+    }
+  },
+  {
+    "document_id": "KB-UPF-001",
+    "title": "N3 and N6 User-Plane Packet Loss Runbook",
+    "document_type": "RUNBOOK",
+    "source": "Synthetic NOC knowledge base",
+    "version": "1.0",
+    "interfaces": [
+      "N3",
+      "N4",
+      "N6"
+    ],
+    "components": [
+      "SMF",
+      "UPF"
+    ],
+    "error_codes": [
+      "PACKET_DROP_HIGH",
+      "QOS_DEGRADED",
+      "USER_PLANE_FAILURE",
+      "SESSION_PACKET_LOSS"
+    ],
+    "symptoms": [
+      "packet drop",
+      "QoS latency",
+      "user-plane forwarding failure"
+    ],
+    "content": "Use this runbook when packet loss on N3 or N6 coincides with UPF forwarding and QoS failures.",
+    "investigation_steps": [
+      "Inspect N3 and N6 interface counters and queue drops.",
+      "Validate UPF QoS policy and resource utilization.",
+      "Correlate the SMF session report with the affected UPF."
+    ],
+    "resolution_steps": [
+      "Remove the confirmed transport or queue bottleneck.",
+      "Restore the approved QoS policy if it drifted.",
+      "Confirm packet delivery and latency KPI recovery."
+    ],
+    "recommended_action": "Correct the confirmed N3/N6 transport or QoS bottleneck and verify user-plane KPI recovery.",
+    "metadata": {
+      "synthetic": true,
+      "scenario_id": "SCENARIO-03"
+    }
+  }
+]

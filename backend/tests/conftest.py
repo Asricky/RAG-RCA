@@ -5,6 +5,8 @@ import pytest
 os.environ["APP_ENV"] = "test"
 os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["JWT_SECRET"] = "test-only-secret-with-at-least-32-characters"
+os.environ["LLM_PROVIDER"] = "mock"
+os.environ["KPI_SOURCE"] = "demo"
 
 
 @pytest.fixture(autouse=True)

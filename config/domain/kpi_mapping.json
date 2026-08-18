@@ -1,0 +1,26 @@
+{
+  "PDU_SESSION_ESTABLISHMENT_SUCCESS_RATIO": {
+    "level": "L1",
+    "related_interfaces": ["N4", "N11"]
+  },
+  "PDU_SESSION_ESTABLISHMENT_FAILURE_RATE": {
+    "level": "L1",
+    "related_interfaces": ["N4", "N11"]
+  },
+  "INITIAL_REGISTRATION_FAILURE_RATE": {
+    "level": "L2",
+    "related_interfaces": ["N1", "N2", "N8", "N12"]
+  },
+  "INITIAL_REGISTRATION_SUCCESS_RATIO": {
+    "level": "L2",
+    "related_interfaces": ["N1", "N2", "N8", "N12"]
+  },
+  "USER_PLANE_PACKET_DELIVERY_SUCCESS_RATIO": {
+    "level": "L1",
+    "related_interfaces": ["N3", "N4", "N6"]
+  },
+  "N7_POLICY_ASSOCIATION_SUCCESS_RATIO": {
+    "level": "L1",
+    "related_interfaces": ["N7"]
+  }
+}

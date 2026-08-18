@@ -1,0 +1,52 @@
+[
+  {
+    "incident_code": "INC-001",
+    "title": "PDU Session Establishment Failure",
+    "description": "The PDU session success ratio dropped on SMF-01 while PFCP failures appeared between SMF-01 and UPF-01.",
+    "incident_timestamp": "2026-08-12T10:03:24Z",
+    "severity": "CRITICAL",
+    "status": "INVESTIGATING",
+    "source_type": "ANOMALY_FORECAST",
+    "nodes": [
+      "SMF-01",
+      "UPF-01"
+    ]
+  },
+  {
+    "incident_code": "INC-002",
+    "title": "UE Registration Failure",
+    "description": "The initial registration success ratio dropped on AMF-02 during authentication timeouts.",
+    "incident_timestamp": "2026-08-12T10:17:48Z",
+    "severity": "MAJOR",
+    "status": "NEW",
+    "source_type": "ANOMALY",
+    "nodes": [
+      "AMF-02"
+    ]
+  },
+  {
+    "incident_code": "INC-003",
+    "title": "User-Plane Delivery Degradation",
+    "description": "The packet delivery success ratio dropped on UPF-02 after N3 packet loss and N6 latency increased.",
+    "incident_timestamp": "2026-08-12T10:32:12Z",
+    "severity": "CRITICAL",
+    "status": "ANALYZED",
+    "source_type": "FORECAST",
+    "nodes": [
+      "UPF-02",
+      "SMF-02"
+    ]
+  },
+  {
+    "incident_code": "INC-004",
+    "title": "Policy Association KPI Degradation",
+    "description": "The N7 policy association KPI dropped on SMF-02, but no causal operational error was captured.",
+    "incident_timestamp": "2026-08-12T10:38:00Z",
+    "severity": "MAJOR",
+    "status": "NEW",
+    "source_type": "ANOMALY",
+    "nodes": [
+      "SMF-02"
+    ]
+  }
+]
