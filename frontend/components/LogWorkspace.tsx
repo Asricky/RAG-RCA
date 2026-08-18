@@ -11,9 +11,15 @@ export type NetworkLog = { log_id:string; "@timestamp":string; node:string; comp
 type Filters = { node:string; component:string; severity:string; keyword:string; trace_id:string; session_id:string; error_code:string };
 type Dataset = { id:string; name:string; source_type:string };
 type MetricCatalog = { source:string; raw_available:boolean; items:KPIContext[] };
-type MetricSeries = { source:string; raw_available:boolean; context:KPIContext|null; points:Array<{timestamp:string;value:number;baseline_value?:number|null;forecast_value?:number|null;anomaly_score?:number|null}> };
+type MetricPoint = {
+  timestamp:string; value:number; baseline_value?:number|null; forecast_value?:number|null;
+  anomaly_score?:number|null; threshold?:number|null; status?:string;
+};
+type MetricSeries = { source:string; raw_available:boolean; context:KPIContext|null; points:MetricPoint[] };
 const EMPTY_FILTERS:Filters = { node:"", component:"", severity:"", keyword:"", trace_id:"", session_id:"", error_code:"" };
 const metricKey = (item: KPIContext) => `${item.kpi_name}::${item.node}`;
+const REPLAY_WINDOW = 24;
+const REPLAY_INTERVAL_MS = 1500;
 
 export default function LogWorkspace({ explorer=false }:{ explorer?:boolean }) {
   const [logs,setLogs]=useState<NetworkLog[]>([]), [summary,setSummary]=useState<any>(null), [selected,setSelected]=useState<Set<string>>(new Set()), [detail,setDetail]=useState<NetworkLog|null>(null);
@@ -21,6 +27,7 @@ export default function LogWorkspace({ explorer=false }:{ explorer?:boolean }) {
   const [assistantOpen,setAssistantOpen]=useState(false), [analyzeRequest,setAnalyzeRequest]=useState(0), [datasets,setDatasets]=useState<Dataset[]>([]), [datasetId,setDatasetId]=useState(""), [incidents,setIncidents]=useState<any[]>([]);
   const [actionMessage,setActionMessage]=useState(""), [actionBusy,setActionBusy]=useState(false);
   const [metricCatalog,setMetricCatalog]=useState<MetricCatalog>({source:"empty",raw_available:false,items:[]}), [selectedMetric,setSelectedMetric]=useState(""), [metricSeries,setMetricSeries]=useState<MetricSeries|null>(null);
+  const [replayIndex,setReplayIndex]=useState(0);
 
   useEffect(()=>{
     Promise.all([api<Dataset[]>("/datasets"),api<any[]>("/incidents"),api<MetricCatalog>("/metrics/kpis")])
@@ -38,6 +45,29 @@ export default function LogWorkspace({ explorer=false }:{ explorer?:boolean }) {
     const query=new URLSearchParams({kpi_name:kpiName,node,limit:"240"});
     void api<MetricSeries>(`/metrics/series?${query}`).then(setMetricSeries).catch(caught=>setError(caught instanceof Error?caught.message:"KPI history could not be loaded"));
   },[selectedMetric,refreshKey]);
+
+  useEffect(()=>{
+    if(explorer)return;
+    setFilters(EMPTY_FILTERS);
+  },[selectedMetric,explorer]);
+
+  useEffect(()=>{
+    const points=metricSeries?.points||[];
+    if(!points.length){setReplayIndex(0);return}
+    const focus=points.findIndex(point=>point.timestamp===metricSeries?.context?.timestamp);
+    setReplayIndex(focus>=0?focus:Math.min(points.length-1,REPLAY_WINDOW-1));
+  },[metricSeries]);
+
+  useEffect(()=>{
+    const points=metricSeries?.points||[];
+    if(paused||explorer||points.length<2)return;
+    const timer=window.setInterval(()=>setReplayIndex(current=>{
+      if(current<points.length-1)return current+1;
+      const focus=points.findIndex(point=>point.timestamp===metricSeries?.context?.timestamp);
+      return Math.max(0,(focus>=0?focus:points.length-1)-Math.floor(REPLAY_WINDOW/2));
+    }),REPLAY_INTERVAL_MS);
+    return()=>window.clearInterval(timer);
+  },[metricSeries,paused,explorer]);
 
   const activeDataset=useMemo(()=>datasets.find(item=>item.id===datasetId),[datasets,datasetId]);
   const datasetFilter=activeDataset?.source_type==="UPLOAD"?datasetId:"";
@@ -69,8 +99,24 @@ export default function LogWorkspace({ explorer=false }:{ explorer?:boolean }) {
   async function findRelated(ids=[...selected]){if(!ids.length||actionBusy)return;setActionBusy(true);setError("");try{const bundle=await api<any>("/logs/search-related",{method:"POST",body:JSON.stringify({log_ids:ids,top_k:20,question:"Find causally related 5G network events"})});const related=(bundle.log_evidence||bundle.evidence_logs) as NetworkLog[];setLogs(related);setSelected(new Set(related.map(row=>row.log_id)));setActionMessage(`${related.length} related logs found among ${bundle.candidate_count} candidates.`);setDetail(null)}catch(caught){setError(caught instanceof Error?caught.message:"Related logs could not be found")}finally{setActionBusy(false)}}
   async function createIncident(ids=[...selected]){if(!ids.length||actionBusy)return;const context=logs.filter(row=>ids.includes(row.log_id));setActionBusy(true);setError("");try{const item=await api<any>("/incidents",{method:"POST",body:JSON.stringify({title:`Investigation: ${[...new Set(context.map(row=>row.component))].join(" / ")} event`,description:`Created from ${ids.length} selected logs (${ids.join(", ")}).`,incident_timestamp:context[0]?.["@timestamp"]||new Date().toISOString(),severity:context.some(row=>row.severity==="CRITICAL")?"CRITICAL":"MAJOR",nodes:[...new Set(context.map(row=>row.node))],source_type:"MANUAL"})});setIncidents(current=>[item,...current]);window.dispatchEvent(new Event("rca:incidents-changed"));setActionMessage(`${item.incident_code} was created from ${ids.length} logs.`);setDetail(null)}catch(caught){setError(caught instanceof Error?caught.message:"The incident could not be created")}finally{setActionBusy(false)}}
 
-  const activeKpi=metricSeries?.context;
-  const kpiChart=(metricSeries?.points||[]).map(point=>({...point,time:fmt(point.timestamp),baseline:point.baseline_value,forecast:point.forecast_value}));
+  const replayPoint=metricSeries?.points[replayIndex];
+  const activeKpi=useMemo<KPIContext|null|undefined>(()=>{
+    const context=metricSeries?.context;
+    if(!context||!replayPoint)return context;
+    return {
+      ...context,
+      timestamp:replayPoint.timestamp,
+      current_value:replayPoint.value,
+      baseline_value:replayPoint.baseline_value,
+      forecast_value:replayPoint.forecast_value,
+      anomaly_score:replayPoint.anomaly_score,
+      threshold:replayPoint.threshold,
+      status:replayPoint.status||context.status,
+    };
+  },[metricSeries,replayPoint]);
+  const kpiChart=(metricSeries?.points||[])
+    .slice(Math.max(0,replayIndex-REPLAY_WINDOW+1),replayIndex+1)
+    .map(point=>({...point,time:fmt(point.timestamp),baseline:point.baseline_value,forecast:point.forecast_value}));
   const actions=<><span className={explorer?"mode-badge":"live-badge"}><i/>{explorer?"SEARCH MODE":paused?"PAUSED":"LIVE"}</span>{!explorer&&<button className="secondary-btn" onClick={()=>setPaused(!paused)}>{paused?<PlayIcon/>:<PauseIcon/>}{paused?"Resume":"Pause"}</button>}<button className="icon-btn" aria-label="Refresh workspace" onClick={()=>setRefreshKey(value=>value+1)}><ArrowPathIcon/></button><button className="secondary-btn mobile-ai-toggle" onClick={()=>setAssistantOpen(true)}><SparklesIcon/>Ask AI</button></>;
 
   return <AppShell title={explorer?"Log Explorer":"Live Operations"} subtitle={explorer?"Search and correlate historical 5G Core events":"KPI-guided 5G Core observability and root cause analysis"} actions={actions}>

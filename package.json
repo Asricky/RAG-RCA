@@ -28,5 +28,8 @@
   "bugs": {
     "url": "https://github.com/Asricky/RAG-RCA/issues"
   },
-  "homepage": "https://github.com/Asricky/RAG-RCA#readme"
+  "homepage": "https://github.com/Asricky/RAG-RCA#readme",
+  "directories": {
+    "doc": "docs"
+  }
 }

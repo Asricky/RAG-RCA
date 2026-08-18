@@ -321,7 +321,11 @@ class LogStore:
         knn_raw = {hit["_id"]: float(hit.get("_score") or 0) for hit in knn_hits}
 
         if selected_ids:
-            selected = self._request("POST", f"/{settings.opensearch_index}/_mget", {"ids": sorted(selected_ids), "_source": source})
+            selected = self._request(
+                "POST",
+                f"/{settings.opensearch_index}/_mget?_source_excludes=embedding",
+                {"ids": sorted(selected_ids)},
+            )
             for item in selected.get("docs", []):
                 if item.get("found"):
                     documents[item["_id"]] = item["_source"]

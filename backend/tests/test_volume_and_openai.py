@@ -55,6 +55,37 @@ def test_opensearch_bulk_payload_is_bounded_by_batch_size(monkeypatch):
         object.__setattr__(settings, "index_batch_size", original_batch_size)
 
 
+def test_selected_log_mget_uses_valid_source_exclusion(monkeypatch):
+    store = LogStore()
+    store.opensearch_status = "Healthy"
+    captured: dict = {}
+    selected_document = {**log_row(1), "log_id": "LOG-SELECTED"}
+    monkeypatch.setattr("app.services.log_store.embedding_encoder.encode_query", lambda _: [0.1] * 384)
+
+    def request(method, path, payload=None, content_type="application/json"):
+        if path.endswith("/_search"):
+            return {"hits": {"hits": []}}
+        if path.endswith("/_count"):
+            return {"count": 1}
+        if "/_mget" in path:
+            captured.update({"method": method, "path": path, "payload": payload})
+            return {"docs": [{"_id": "LOG-SELECTED", "found": True, "_source": selected_document}]}
+        raise AssertionError(f"Unexpected OpenSearch request: {path}")
+
+    monkeypatch.setattr(store, "_request", request)
+    ranked, candidate_count = store.hybrid_search(
+        "What is the root cause?", {}, top_k=10, alpha=0.5, selected_ids={"LOG-SELECTED"}
+    )
+
+    assert captured == {
+        "method": "POST",
+        "path": f"/{settings.opensearch_index}/_mget?_source_excludes=embedding",
+        "payload": {"ids": ["LOG-SELECTED"]},
+    }
+    assert candidate_count == 1
+    assert ranked[0]["log_id"] == "LOG-SELECTED"
+
+
 def test_openai_responses_request_uses_gpt_56_sol_and_strict_schema(monkeypatch):
     captured: dict = {}
     originals = {key: getattr(settings, key) for key in ("openai_api_key", "openai_model", "openai_reasoning_effort")}
